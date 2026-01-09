@@ -759,9 +759,10 @@ void derive_amiibo_keys() {
     bool is_dev = fuse_read_hw_state() == FUSE_NX_HW_STATE_DEV;
 
     key_storage_t __attribute__((aligned(4))) prod_keys = {0}, dev_keys = {0};
-    key_storage_t *keys = is_dev ? &dev_keys : &prod_keys;
+    key_storage_t *p_prod_keys = &prod_keys;
+    key_storage_t *p_dev_keys = &dev_keys;
 
-    _derive_master_keys(&prod_keys, &dev_keys, is_dev);
+    _derive_master_keys(p_prod_keys, p_dev_keys, is_dev);
 
     minerva_periodic_training();
 
@@ -773,29 +774,40 @@ void derive_amiibo_keys() {
 
     minerva_periodic_training();
 
-    if (!key_exists(keys->master_key[0])) {
+    if (!key_exists(p_prod_keys->master_key[0]) || !key_exists(p_dev_keys->master_key[0])) {
         EPRINTF("Unable to derive master keys for NFC.");
         minerva_change_freq(FREQ_800);
         btn_wait();
         return;
     }
 
-    nfc_save_key_t __attribute__((aligned(4))) nfc_save_keys[2] = {0};
+    nfc_save_key_t __attribute__((aligned(4))) nfc_save_keys_prod[2] = {0};
+    nfc_save_key_t __attribute__((aligned(4))) nfc_save_keys_dev[2] = {0};
 
-    nfc_decrypt_amiibo_keys(keys, nfc_save_keys, is_dev);
+    nfc_decrypt_amiibo_keys(p_prod_keys, nfc_save_keys_prod, false);
+    nfc_decrypt_amiibo_keys(p_dev_keys, nfc_save_keys_dev, true);
 
     minerva_periodic_training();
 
-    u32 hash[SE_SHA_256_SIZE / 4] = {0};
-    se_calc_sha256_oneshot(hash, &nfc_save_keys[0], sizeof(nfc_save_keys));
+    u32 hash_prod[SE_SHA_256_SIZE / 4] = {0};
+    u32 hash_dev[SE_SHA_256_SIZE / 4] = {0};
+    se_calc_sha256_oneshot(hash_prod, &nfc_save_keys_prod[0], sizeof(nfc_save_keys_prod));
+    se_calc_sha256_oneshot(hash_dev, &nfc_save_keys_dev[0], sizeof(nfc_save_keys_dev));
 
-    if (memcmp(hash, is_dev ? nfc_blob_hash_dev : nfc_blob_hash, sizeof(hash)) != 0) {
+    if ((memcmp(hash_prod, nfc_blob_hash, sizeof(hash_prod)) != 0) || (memcmp(hash_dev, nfc_blob_hash_dev, sizeof(hash_dev)) != 0)) {
         EPRINTF("Amiibo hash mismatch. Skipping save.");
     } else {
-        const char *keyfile_path = is_dev ? "sd:/switch/key_dev.bin" : "sd:/switch/key_retail.bin";
+        const char *keyfile_path_prod = "sd:/switch/key_retail.bin";
+        const char *keyfile_path_dev = "sd:/switch/key_dev.bin";
 
-        if (!sd_save_to_file(&nfc_save_keys[0], sizeof(nfc_save_keys), keyfile_path)) {
-            gfx_printf("%kWrote Amiibo keys to\n %s\n", colors[(color_idx++) % 6], keyfile_path);
+        if (!sd_save_to_file(&nfc_save_keys_prod[0], sizeof(nfc_save_keys_prod), keyfile_path_prod)) {
+            gfx_printf("%kWrote Amiibo keys to\n %s\n", colors[(color_idx++) % 6], keyfile_path_prod);
+        } else {
+            EPRINTF("Unable to save Amiibo keys to SD.");
+        }
+
+        if (!sd_save_to_file(&nfc_save_keys_dev[0], sizeof(nfc_save_keys_dev), keyfile_path_dev)) {
+            gfx_printf("%kWrote Amiibo keys to\n %s\n", colors[(color_idx++) % 6], keyfile_path_dev);
         } else {
             EPRINTF("Unable to save Amiibo keys to SD.");
         }
